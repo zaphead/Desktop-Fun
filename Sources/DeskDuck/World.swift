@@ -3,7 +3,7 @@ import AppKit
 /// A one-way horizontal surface the duck can stand on (or hang from, for ceilings).
 /// All coordinates are AppKit global points: origin at the bottom-left of the primary screen, y up.
 struct Platform: Equatable {
-    enum Kind { case floor, icon, window, ceiling }
+    enum Kind { case floor, icon, window, content, ceiling }
     let id: String
     let kind: Kind
     var x0: CGFloat
@@ -49,7 +49,18 @@ final class World {
 
     init() { refreshScreens() }
 
-    var allStandable: [Platform] { floors + windowTops + iconPlatforms }
+    // Which kinds of surfaces the duck is allowed to use (from Settings).
+    var useIcons = true
+    var useWindowTops = true
+    var useAppContent = true
+
+    /// Platforms made from elements inside the focused window (buttons, images, text, rows...).
+    private(set) var contentPlatforms: [Platform] = []
+    private(set) var contentPID: pid_t = 0
+
+    var allStandable: [Platform] {
+        floors + (useWindowTops ? windowTops : []) + (useIcons ? iconPlatforms : []) + (useAppContent ? contentPlatforms : [])
+    }
 
     var iconPlatforms: [Platform] {
         icons.compactMap { icon in
@@ -66,6 +77,7 @@ final class World {
     func platform(id: String) -> Platform? {
         if id.hasPrefix("i:") { return iconPlatforms.first { $0.id == id } }
         if id.hasPrefix("w:") { return windowTops.first { $0.id == id } }
+        if id.hasPrefix("a:") { return contentPlatforms.first { $0.id == id } }
         if id.hasPrefix("c:") { return ceilings.first { $0.id == id } }
         return floors.first { $0.id == id }
     }
@@ -183,6 +195,59 @@ final class World {
         }
         windowTops = tops
         windowCeilings = hangs
+    }
+
+    // MARK: App contents (via Accessibility)
+
+    func clearContent() { contentPlatforms = [] }
+
+    /// Turns a scan of the focused window into platforms: only the parts you can actually see,
+    /// with room above them, and without a platform on every single line of text.
+    func setContent(_ r: AXScanner.Result?) {
+        guard let r else { contentPlatforms = []; return }
+        let win = toAppKit(r.windowFrame)
+        // Windows stacked in front of the scanned one hide its contents.
+        let idx = windowRects.firstIndex { abs($0.minX - win.minX) < 4 && abs($0.maxY - win.maxY) < 4 && abs($0.width - win.width) < 6 }
+        let front = idx.map { Array(windowRects[..<$0]) } ?? []
+        var cands: [(x0: CGFloat, x1: CGFloat, y: CGFloat)] = []
+        for cg in r.rects {
+            let a = toAppKit(cg)
+            let y = a.maxY
+            let x0 = max(a.minX + 3, win.minX + 6), x1 = min(a.maxX - 3, win.maxX - 6)
+            guard x1 - x0 >= 24, y < win.maxY - 24, y > win.minY + 8 else { continue }   // skip the title bar
+            let mid = CGPoint(x: (x0 + x1) / 2, y: y - 1)
+            if front.contains(where: { $0.contains(mid) }) { continue }
+            if headroom(x: mid.x, y: y) < duckHeight * 0.8 { continue }
+            cands.append((x0, x1, y))
+        }
+        // Merge edges at the same height that touch, then drop edges hugging just under another one.
+        cands.sort { $0.y > $1.y || ($0.y == $1.y && $0.x0 < $1.x0) }
+        var merged: [(x0: CGFloat, x1: CGFloat, y: CGFloat)] = []
+        for c in cands {
+            if let i = merged.lastIndex(where: { abs($0.y - c.y) < 4 && c.x0 <= $0.x1 + 6 && c.x1 >= $0.x0 - 6 }) {
+                merged[i].x0 = min(merged[i].x0, c.x0)
+                merged[i].x1 = max(merged[i].x1, c.x1)
+            } else {
+                merged.append(c)
+            }
+        }
+        var kept: [(x0: CGFloat, x1: CGFloat, y: CGFloat)] = []
+        for c in merged where !kept.contains(where: { k in k.y > c.y && k.y - c.y < 18 && c.x0 < k.x1 && c.x1 > k.x0 }) {
+            kept.append(c)
+            if kept.count >= 160 { break }
+        }
+        contentPID = r.pid
+        contentPlatforms = kept.map { c in
+            Platform(id: "a:\(Int(c.x0 / 3)),\(Int(c.y / 2)),\(Int((c.x1 - c.x0) / 3))", kind: .content,
+                     x0: c.x0, x1: c.x1, y: c.y)
+        }
+    }
+
+    /// When a platform vanishes (scrolling, re-layout), find the surface that's probably the same thing.
+    func replacement(for old: Platform, near x: CGFloat, ceiling: Bool) -> Platform? {
+        let pool = ceiling ? ceilings : allStandable
+        return pool.filter { $0.kind == old.kind && x >= $0.x0 - 4 && x <= $0.x1 + 4 && abs($0.y - old.y) < 36 }
+            .min { abs($0.y - old.y) < abs($1.y - old.y) }
     }
 
     // MARK: Desktop icons (via Finder scripting)

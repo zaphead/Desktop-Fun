@@ -15,7 +15,8 @@ final class DuckController: NSObject {
     var menuProvider: (() -> NSMenu)?
 
     // MARK: Settings
-    var allowIconMoves = true
+    let settings: DuckSettings
+    private let scanner = AXScanner()
     private(set) var sizeMul: CGFloat = 1
     private var unit: CGFloat { 7.6 * sizeMul }                 // points per model unit
     private var hc: CGFloat { DuckRig.centerHeight * unit }     // body center to soles
@@ -78,8 +79,14 @@ final class DuckController: NSObject {
     // MARK: Timers
     private var windowRefresh: Double = 0
     private var iconRefresh: Double = 0
+    private var contentScan: Double = 0
+    private var lastGround: Platform?
+    private var lastScan = "-"
 
-    init(theme: DuckTheme, sizeMul: CGFloat) {
+    init(settings: DuckSettings) {
+        self.settings = settings
+        let theme = DuckTheme.all[settings.theme]
+        let sizeMul = CGFloat(settings.size)
         self.sizeMul = sizeMul
         world = World()
         scene = DuckScene(theme: theme, viewSize: 160 * sizeMul)
@@ -96,6 +103,12 @@ final class DuckController: NSObject {
         world.refreshIcons()
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        // A different app in front means a different window to explore.
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(appActivated),
+                                                          name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(appQuit(_:)),
+                                                          name: NSWorkspace.didTerminateApplicationNotification, object: nil)
+        applySettings()
         mouse = NSEvent.mouseLocation
         spawn(at: mouse)
     }
@@ -146,6 +159,29 @@ final class DuckController: NSObject {
     }
 
     func setTheme(_ t: DuckTheme) { scene.rig.apply(theme: t) }
+
+    /// Push the cheap-to-apply settings down to the parts that use them.
+    func applySettings() {
+        world.useIcons = settings.useIcons
+        world.useWindowTops = settings.useWindowTops
+        world.useAppContent = settings.useAppContent
+        scanner.wakeWebContent = settings.wakeWebContent
+        quacker.muted = settings.muted
+        quacker.volumeScale = Float(settings.volume)
+        if !settings.useAppContent { world.clearContent() }
+        contentScan = 0
+    }
+
+    @objc private func appActivated() {
+        world.clearContent()
+        contentScan = 0.15
+    }
+
+    @objc private func appQuit(_ note: Notification) {
+        if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+            scanner.forget(pid: app.processIdentifier)
+        }
+    }
 
     func setSize(_ m: CGFloat) {
         sizeMul = m
@@ -226,6 +262,11 @@ final class DuckController: NSObject {
             iconRefresh = world.iconLookupFailed ? 60 : (state == .sit ? 8 : 4)
         }
 
+        contentScan -= dt
+        if contentScan <= 0 {
+            scanContent()
+        }
+
         update(dt)
         animate(dt)
         render()
@@ -241,9 +282,10 @@ final class DuckController: NSObject {
     private func debugLog() {
         guard let path = debugPath, time - debugT > 0.5 else { return }
         debugT = time
-        let line = String(format: "%.1f %@ pos=(%.0f,%.0f) ground=%@ ceil=%d roll=%.2f icons=%d iconFail=%d winTops=%d surf=%@\n",
+        let line = String(format: "%.1f %@ pos=(%.0f,%.0f) ground=%@ ceil=%d roll=%.2f icons=%d iconFail=%d winTops=%d content=%d ax=%d scan=%@ surf=%@\n",
                           time, "\(state)", pos.x, pos.y, groundID ?? "-", onCeiling ? 1 : 0, roll,
-                          world.icons.count, world.iconLookupFailed ? 1 : 0, world.windowTops.count, surf?.name ?? "-")
+                          world.icons.count, world.iconLookupFailed ? 1 : 0, world.windowTops.count,
+                          world.contentPlatforms.count, AXScanner.isTrusted ? 1 : 0, lastScan, surf?.name ?? "-")
         if Int(time * 2) % 16 == 0 {
             if let img = view.duckRenderer.image(pixels: 360, time: time), let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
                let png = rep.representation(using: .png, properties: [:]) {
@@ -266,7 +308,31 @@ final class DuckController: NSObject {
         if s != .sit { asleep = false }
     }
 
-    private func currentGround() -> Platform? { groundID.flatMap { world.platform(id: $0) } }
+    private func currentGround() -> Platform? {
+        if let id = groundID, let p = world.platform(id: id) { return p }
+        // The surface moved or was re-laid out (e.g. you scrolled): follow it if we can tell where it went.
+        if let old = lastGround, groundID != nil, let p = world.replacement(for: old, near: pos.x, ceiling: onCeiling) {
+            groundID = p.id
+            groundX0 = p.x0
+            return p
+        }
+        return nil
+    }
+
+    private func scanContent() {
+        guard settings.useAppContent, AXScanner.isTrusted, panel.isVisible else {
+            contentScan = 2
+            return
+        }
+        let onContent = groundID?.hasPrefix("a:") == true
+        // Scanning costs the scanned app CPU too, so keep it gentle: more often only while standing on its contents.
+        contentScan = onContent ? 0.7 : (state == .sit ? 6 : 2)
+        scanner.scan { [weak self] result in
+            guard let self, self.settings.useAppContent else { return }
+            self.world.setContent(result)
+            self.lastScan = result.map { "\($0.pid):\($0.rects.count)/\(Int($0.elapsed * 1000))ms" } ?? "none"
+        }
+    }
 
     private func snap(to p: Platform) {
         pos.y = onCeiling ? p.y - hc : p.y + hc
@@ -292,6 +358,7 @@ final class DuckController: NSObject {
         guard let g = currentGround(), pos.x >= g.x0 - 6, pos.x <= g.x1 + 6 else { return startFall() }
         if let x0 = groundX0, World.isWindowPlatform(g.id), abs(g.x0 - x0) < 200 { pos.x += g.x0 - x0 }
         groundX0 = g.x0
+        lastGround = g
         snap(to: g)
         let rollTarget: CGFloat = onCeiling ? .pi : 0
         roll += (rollTarget - roll) * CGFloat(min(1, dt * 12))
@@ -300,7 +367,8 @@ final class DuckController: NSObject {
         case .idle:
             if stateT >= stateDur { decide() }
         case .walk:
-            let speed: CGFloat = (onCeiling ? 50 : 74) * sizeMul
+            // Big ducks lumber: speed grows slower than size, so strides get slow and heavy.
+            let speed: CGFloat = (onCeiling ? 50 : 74) * sqrt(sizeMul) * CGFloat(settings.walkSpeed)
             let target = walkOffEdge ? walkTarget : min(max(walkTarget, g.x0 + 8), g.x1 - 8)
             let dx = target - pos.x
             if abs(dx) < 2 || stateT > 10 {
@@ -354,14 +422,15 @@ final class DuckController: NSObject {
         }
         // Wandering: sometimes set off for somewhere far away, and keep heading there across decisions.
         if let gl = goal, hypot(gl.x - pos.x, gl.y - (pos.y - hc)) < 100 || time - goalSince > 45 { goal = nil }
-        if goal == nil && Double.random(in: 0...1) < 0.4 { pickGoal() }
+        if goal == nil && Double.random(in: 0...1) < 0.1 + 0.6 * settings.wanderlust { pickGoal() }
         if let gl = goal, Double.random(in: 0...1) < 0.85 {
             if pursueGoal(from: g, to: gl) { return }
             goal = nil
         }
 
         var options: [(Double, () -> Void)] = []
-        options.append((1.2, { self.enter(.idle, dur: .random(in: 0.8...2.5)) }))
+        let calm = 1.5 - settings.energy          // 1.5 (sleepy) ... 0.5 (hyper)
+        options.append((1.2 * calm, { self.enter(.idle, dur: .random(in: 0.8...2.5) * calm) }))
         if g.width > 70 {
             options.append((3.0, {
                 // Prefer a real stroll over a shuffle.
@@ -371,20 +440,20 @@ final class DuckController: NSObject {
             }))
         }
         let hops = jumpTargets(from: g, rocket: false)
-        if !hops.isEmpty { options.append((g.kind == .floor ? 6 : 4, { self.jump(to: hops.randomElement()!, rocket: false) })) }
+        if !hops.isEmpty { options.append(((g.kind == .floor ? 6 : 4) * (0.2 + 1.6 * settings.jumpiness), { self.jump(to: hops.randomElement()!, rocket: false) })) }
         let far = jumpTargets(from: g, rocket: true)
-        if !far.isEmpty { options.append((g.kind == .floor ? 2.0 : 0.9, { self.jump(to: far.randomElement()!, rocket: true) })) }
-        if time - lastCeiling > 25, let c = reachableCeiling() {
-            options.append((c.id.hasSuffix("notch") ? 1.4 : 1.1, { self.jumpToCeiling(c) }))
+        if !far.isEmpty { options.append(((g.kind == .floor ? 2.0 : 0.9) * 2 * settings.rockets, { self.jump(to: far.randomElement()!, rocket: true) })) }
+        if settings.hanging > 0.02, time - lastCeiling > 45 - 35 * settings.hanging, let c = reachableCeiling() {
+            options.append(((c.id.hasSuffix("notch") ? 1.4 : 1.1) * 2 * settings.hanging, { self.jumpToCeiling(c) }))
         }
-        if allowIconMoves, g.kind == .icon, time - lastSurf > 35, world.iconsAvailable {
-            options.append((2.2, { self.startSurf(on: g) }))
+        if settings.moveIcons, settings.useIcons, g.kind == .icon, time - lastSurf > 60 - 45 * settings.surfing, world.iconsAvailable {
+            options.append((0.5 + 3 * settings.surfing, { self.startSurf(on: g) }))
         }
-        options.append((mouseIdle > 90 ? 5 : 0.7, { self.enter(.sit, dur: .random(in: 6...16)) }))
+        options.append(((mouseIdle > 90 ? 5 : 0.7) * 2 * settings.naps, { self.enter(.sit, dur: .random(in: 6...16) * (0.5 + self.settings.naps)) }))
         options.append((0.5, { self.quackNow() }))
         let d = hypot(mouse.x - pos.x, mouse.y - pos.y)
-        if d < 400 && mouseIdle < 3 && mouse.x > g.x0 && mouse.x < g.x1 {
-            options.append((3.0, { self.walk(to: self.mouse.x - self.facing * 20) }))
+        if d < 200 + 400 * settings.curiosity && mouseIdle < 3 && mouse.x > g.x0 && mouse.x < g.x1 {
+            options.append((6.0 * settings.curiosity, { self.walk(to: self.mouse.x - self.facing * 20) }))
         }
 
         var r = Double.random(in: 0..<options.reduce(0) { $0 + $1.0 })
@@ -450,6 +519,7 @@ final class DuckController: NSObject {
     // MARK: Jumping
 
     private func jumpTargets(from g: Platform, rocket: Bool) -> [(Platform, CGFloat)] {
+        let reach = CGFloat(0.75 + 0.5 * settings.jumpiness)
         let feet = g.y
         var out: [(Platform, CGFloat)] = []
         for q in world.allStandable where q.id != g.id && q.width > 24 {
@@ -462,7 +532,7 @@ final class DuckController: NSObject {
             if rocket {
                 if hypot(dx, dy) > 300, abs(dx) < 1100, dy > -900, dy < 1000 { out.append((q, tx)) }
             } else {
-                if abs(dx) < 340 * sizeMul, dy > -480, dy < 180 * sizeMul, abs(dx) + abs(dy) > 30 { out.append((q, tx)) }
+                if abs(dx) < reach * 340 * sizeMul, dy > -480, dy < reach * 180 * sizeMul, abs(dx) + abs(dy) > 30 { out.append((q, tx)) }
             }
         }
         return out
@@ -615,7 +685,7 @@ final class DuckController: NSObject {
         rocket = false
         roll = roll.remainder(dividingBy: 2 * .pi)
         hardLanding = impact > 1500 || abs(roll) > 1.2
-        if hardLanding { quacker.play("bonk", volume: 0.25) }
+        if hardLanding || sizeMul > 2.5 { quacker.play("bonk", volume: sizeMul > 2.5 ? 0.4 : 0.25) }   // giants stomp
         enter(.land, dur: hardLanding ? 0.5 : 0.16)
     }
 
@@ -824,7 +894,7 @@ final class DuckController: NSObject {
                 if Double.random(in: 0...1) < 0.3 { glance = CGPoint(x: headPos.x, y: headPos.y + 10) }  // look at you
                 glanceTimer = .random(in: 1.5...4)
             }
-            let watching = hypot(mouse.x - pos.x, mouse.y - pos.y) < 520 && mouseIdle < 4
+            let watching = settings.curiosity > 0.02 && hypot(mouse.x - pos.x, mouse.y - pos.y) < 220 + 600 * settings.curiosity && mouseIdle < 4
             let look = watching ? mouse : glance
             let s: CGFloat = cos(roll) >= 0 ? 1 : -1
             let dx = look.x - headPos.x, dy = look.y - headPos.y

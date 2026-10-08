@@ -3,6 +3,7 @@ import AppKit
 /// Synthesized robot quacks — no audio files needed.
 final class Quacker {
     var muted = false
+    var volumeScale: Float = 0.7
     private var sounds: [String: [NSSound]] = [:]
 
     init() {
@@ -16,7 +17,7 @@ final class Quacker {
     func play(_ name: String, volume: Float = 0.35) {
         guard !muted, let s = sounds[name]?.randomElement() else { return }
         let copy = (s.copy() as? NSSound) ?? s
-        copy.volume = volume
+        copy.volume = volume * volumeScale * 1.4
         copy.play()
     }
 

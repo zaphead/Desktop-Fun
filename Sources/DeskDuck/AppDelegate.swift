@@ -1,26 +1,47 @@
 import AppKit
+import Combine
 
-/// Menu bar app: owns the duck and its settings. No Dock icon.
+/// Menu bar app: owns the duck, its settings and the settings window. No Dock icon.
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var duck: DuckController!
-    private let defaults = UserDefaults.standard
-    private let sizes: [(String, CGFloat)] = [("Small", 0.75), ("Medium", 1.0), ("Large", 1.35)]
+    private let settings = DuckSettings()
+    private var settingsWindow: SettingsWindowController!
+    private var subscriptions = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        defaults.register(defaults: ["theme": 0, "size": 1.0, "moveIcons": true, "muted": false])
-        let theme = DuckTheme.all[min(max(defaults.integer(forKey: "theme"), 0), DuckTheme.all.count - 1)]
-        duck = DuckController(theme: theme, sizeMul: CGFloat(defaults.double(forKey: "size")))
-        duck.allowIconMoves = defaults.bool(forKey: "moveIcons")
-        duck.quacker.muted = defaults.bool(forKey: "muted")
+        duck = DuckController(settings: settings)
         duck.menuProvider = { [weak self] in self?.buildMenu() ?? NSMenu() }
         duck.start()
+
+        settingsWindow = SettingsWindowController(settings: settings, actions: .init(
+            summon: { [weak self] in self?.duck.summon() },
+            quack: { [weak self] in self?.duck.quackNow() }))
+
+        // Apply settings live as they change.
+        settings.$theme.dropFirst().sink { [weak self] t in self?.duck.setTheme(DuckTheme.all[t]) }.store(in: &subscriptions)
+        settings.$size.dropFirst().sink { [weak self] s in self?.duck.setSize(CGFloat(s)) }.store(in: &subscriptions)
+        settings.objectWillChange
+            .receive(on: RunLoop.main)   // fires before the change lands; apply on the next turn
+            .sink { [weak self] in self?.duck.applySettings() }
+            .store(in: &subscriptions)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "bird.fill", accessibilityDescription: "Desk Duck")
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
+
+        // First launch: show settings so the permissions are explained before macOS asks for them.
+        if !UserDefaults.standard.bool(forKey: "didOnboard") {
+            UserDefaults.standard.set(true, forKey: "didOnboard")
+            settingsWindow.show()
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        settingsWindow.show()
+        return false
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -34,43 +55,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         m.addItem(item("Summon to Cursor", #selector(summon)))
         m.addItem(item(duck.isHidden ? "Show Duck" : "Hide Duck", #selector(toggleHidden)))
         m.addItem(.separator())
-
-        let colors = NSMenu()
-        for (i, t) in DuckTheme.all.enumerated() {
-            let it = item(t.name, #selector(pickTheme(_:)))
-            it.tag = i
-            it.state = defaults.integer(forKey: "theme") == i ? .on : .off
-            colors.addItem(it)
-        }
-        let colorItem = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
-        colorItem.submenu = colors
-        m.addItem(colorItem)
-
-        let sizeMenu = NSMenu()
-        for (i, s) in sizes.enumerated() {
-            let it = item(s.0, #selector(pickSize(_:)))
-            it.tag = i
-            it.state = abs(defaults.double(forKey: "size") - Double(s.1)) < 0.01 ? .on : .off
-            sizeMenu.addItem(it)
-        }
-        let sizeItem = NSMenuItem(title: "Size", action: nil, keyEquivalent: "")
-        sizeItem.submenu = sizeMenu
-        m.addItem(sizeItem)
-
-        let move = item("Let Duck Move Icons", #selector(toggleIcons))
-        move.state = duck.allowIconMoves ? .on : .off
-        m.addItem(move)
-        let mute = item("Mute", #selector(toggleMute))
-        mute.state = duck.quacker.muted ? .on : .off
-        m.addItem(mute)
-        if duck.world.iconLookupFailed {
-            let warn = NSMenuItem(title: "Can't see desktop icons — allow Finder access in Privacy settings", action: nil, keyEquivalent: "")
-            warn.isEnabled = false
-            m.addItem(warn)
-        }
+        m.addItem(sizeMenuItem())
+        m.addItem(.separator())
+        let s = item("Settings…", #selector(openSettings))
+        s.keyEquivalent = ","
+        m.addItem(s)
         m.addItem(.separator())
         m.addItem(item("Quit Desk Duck", #selector(quit)))
         return m
+    }
+
+    /// A live size slider right in the menu.
+    private func sizeMenuItem() -> NSMenuItem {
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 46))
+        let label = NSTextField(labelWithString: "Size  \(settings.sizeLabel)")
+        label.font = .menuFont(ofSize: 0)
+        label.textColor = .secondaryLabelColor
+        label.frame = NSRect(x: 20, y: 25, width: 200, height: 16)
+        label.tag = 1
+        let slider = NSSlider(value: settings.sizeSlider, minValue: 0, maxValue: 1,
+                              target: self, action: #selector(sizeSliderChanged(_:)))
+        slider.isContinuous = true
+        slider.frame = NSRect(x: 18, y: 4, width: 206, height: 20)
+        box.addSubview(label)
+        box.addSubview(slider)
+        let it = NSMenuItem()
+        it.view = box
+        return it
+    }
+
+    @objc private func sizeSliderChanged(_ s: NSSlider) {
+        settings.sizeSlider = s.doubleValue
+        (s.superview?.viewWithTag(1) as? NSTextField)?.stringValue = "Size  \(settings.sizeLabel)"
     }
 
     private func item(_ title: String, _ sel: Selector) -> NSMenuItem {
@@ -82,22 +98,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func quack() { duck.quackNow() }
     @objc private func summon() { duck.summon() }
     @objc private func toggleHidden() { duck.setHidden(!duck.isHidden) }
-    @objc private func pickTheme(_ s: NSMenuItem) {
-        defaults.set(s.tag, forKey: "theme")
-        duck.setTheme(DuckTheme.all[s.tag])
-    }
-    @objc private func pickSize(_ s: NSMenuItem) {
-        let v = sizes[s.tag].1
-        defaults.set(Double(v), forKey: "size")
-        duck.setSize(v)
-    }
-    @objc private func toggleIcons() {
-        duck.allowIconMoves.toggle()
-        defaults.set(duck.allowIconMoves, forKey: "moveIcons")
-    }
-    @objc private func toggleMute() {
-        duck.quacker.muted.toggle()
-        defaults.set(duck.quacker.muted, forKey: "muted")
-    }
+    @objc private func openSettings() { settingsWindow.show() }
     @objc private func quit() { NSApp.terminate(nil) }
 }
