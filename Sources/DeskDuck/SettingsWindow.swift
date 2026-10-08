@@ -146,6 +146,7 @@ struct SettingsView: View {
 
     private var personalitySection: some View {
         Section {
+            PresetPicker(settings: settings)
             SliderRow("Energy", value: $settings.energy, low: "Chill", high: "Hyper")
             SliderRow("Wanderlust", value: $settings.wanderlust, low: "Homebody", high: "Explorer")
             SliderRow("Walking speed", value: $settings.walkSpeed, range: 0.5...2, low: "Slow", high: "Fast")
@@ -230,6 +231,41 @@ struct SettingsView: View {
             Toggle("Mute", isOn: $settings.muted)
             SliderRow("Volume", value: $settings.volume, low: "Quiet", high: "Loud").disabled(settings.muted)
         }
+    }
+}
+
+/// One-click personalities, shown as a grid of tiles. The tile matching the sliders is highlighted.
+private struct PresetPicker: View {
+    @ObservedObject var settings: DuckSettings
+
+    var body: some View {
+        let current = settings.currentPreset?.name
+        VStack(alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 8)], spacing: 8) {
+                ForEach(PersonalityPreset.all) { p in
+                    let selected = p.name == current
+                    Button {
+                        withAnimation(.snappy) { settings.apply(p) }
+                    } label: {
+                        VStack(spacing: 6) {
+                            Image(systemName: p.symbol).font(.title2).frame(height: 26)
+                            Text(p.name).font(.callout.weight(.medium))
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 64)
+                        .foregroundStyle(selected ? Color.white : Color.primary)
+                        .background(selected ? Color.accentColor : Color.primary.opacity(0.06),
+                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .help(p.blurb)
+                }
+            }
+            Text(settings.currentPreset?.blurb ?? "Custom: you've tuned the sliders below yourself.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
     }
 }
 

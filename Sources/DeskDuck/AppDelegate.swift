@@ -64,6 +64,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         m.addItem(.separator())
         m.addItem(sizeMenuItem())
         m.addItem(.separator())
+        let moods = NSMenu()
+        let current = settings.currentPreset?.name
+        for (i, p) in PersonalityPreset.all.enumerated() {
+            let it = item(p.name, #selector(pickPreset(_:)))
+            it.tag = i
+            it.state = p.name == current ? .on : .off
+            it.image = NSImage(systemSymbolName: p.symbol, accessibilityDescription: nil)
+            it.toolTip = p.blurb
+            moods.addItem(it)
+        }
+        if current == nil {
+            moods.addItem(.separator())
+            let custom = NSMenuItem(title: "Custom", action: nil, keyEquivalent: "")
+            custom.state = .on
+            custom.isEnabled = false
+            moods.addItem(custom)
+        }
+        let moodItem = NSMenuItem(title: "Personality", action: nil, keyEquivalent: "")
+        moodItem.submenu = moods
+        m.addItem(moodItem)
         let mischief = NSMenu()
         for p in Prank.allCases {
             let it = item(p.title, #selector(tryPrank(_:)))
@@ -122,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func toggleHidden() { duck.setHidden(!duck.isHidden) }
     @objc private func openSettings() { settingsWindow.show() }
     @objc private func toggleMute() { settings.muted.toggle() }
+    @objc private func pickPreset(_ s: NSMenuItem) { settings.apply(PersonalityPreset.all[s.tag]) }
     @objc private func tryPrank(_ s: NSMenuItem) {
         if let raw = s.representedObject as? String, let p = Prank(rawValue: raw) { duck.tryPrank(p) }
     }
