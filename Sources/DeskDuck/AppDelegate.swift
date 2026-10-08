@@ -58,6 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         m.addItem(item("Quack!", #selector(quack)))
         m.addItem(item("Summon to Cursor", #selector(summon)))
         m.addItem(item(duck.isHidden ? "Show Duck" : "Hide Duck", #selector(toggleHidden)))
+        let mute = item("Mute", #selector(toggleMute))
+        mute.state = settings.muted ? .on : .off
+        m.addItem(mute)
         m.addItem(.separator())
         m.addItem(sizeMenuItem())
         m.addItem(.separator())
@@ -118,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func summon() { duck.summon() }
     @objc private func toggleHidden() { duck.setHidden(!duck.isHidden) }
     @objc private func openSettings() { settingsWindow.show() }
+    @objc private func toggleMute() { settings.muted.toggle() }
     @objc private func tryPrank(_ s: NSMenuItem) {
         if let raw = s.representedObject as? String, let p = Prank(rawValue: raw) { duck.tryPrank(p) }
     }

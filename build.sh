@@ -18,7 +18,10 @@ if [ ! -f Resources/AppIcon.icns ]; then
   iconutil -c icns "$SET" -o Resources/AppIcon.icns
 fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/DeskDuck "$APP/Contents/MacOS/DeskDuck"
+# SwiftPM stamps the binary with the deployment target as its SDK version, which makes macOS run it in
+# compatibility mode (no Liquid Glass). Stamp it with the real SDK so it gets the current system design.
+SDK=$(xcrun --sdk macosx --show-sdk-version)
+vtool -set-build-version macos 14.0 "$SDK" -replace -output "$APP/Contents/MacOS/DeskDuck" .build/release/DeskDuck
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -34,6 +37,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>DTSDKName</key><string>macosx$SDK</string>
+  <key>DTPlatformVersion</key><string>$SDK</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSAppleEventsUsageDescription</key><string>Desk Duck reads where your desktop icons are so it can hop on them, and nudges them around when it goes surfing.</string>
