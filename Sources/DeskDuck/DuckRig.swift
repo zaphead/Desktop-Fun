@@ -50,6 +50,7 @@ struct DuckPose {
     var billOpen: CGFloat = 0
     var iris: CGFloat = 1             // camera aperture scale
     var sitting: CGFloat = 0          // lets the body rest on the ground
+    var lift: CGFloat = 0             // extra height above the ground (skipping), in model units
 }
 
 /// Builds the robot duck out of SceneKit primitives and applies poses to it.
@@ -386,9 +387,19 @@ final class DuckRig {
         var low = min(DuckRig.soleY(p.left, pitch: p.pelvisPitch), DuckRig.soleY(p.right, pitch: p.pelvisPitch))
         low = min(low, -0.5)   // the hip block rests on the ground when the legs fold up
         let standing = DuckRig.soleY(DuckPose.Leg(), pitch: 0)
-        let y = grounded ? (-DuckRig.centerHeight - low) : (-DuckRig.centerHeight - standing)
+        let y = grounded ? (-DuckRig.centerHeight - low + p.lift) : (-DuckRig.centerHeight - standing)
         pelvis.position = SCNVector3(0, y, 0)
     }
+
+    /// Hides everything below the head (used for the app icon close-up).
+    func showHeadOnly() {
+        for joint in [pelvis, neckBase, neckMid] { joint.childNode(withName: "geo", recursively: false)?.isHidden = true }
+        for l in legs { l.hip.isHidden = true }
+        shadow.isHidden = true
+    }
+
+    /// Roughly the middle of the head (hood + face + bill), in world coordinates.
+    var headCenter: SCNVector3 { head.convertPosition(SCNVector3(0, 1.1, 0.1), to: nil) }
 
     func setFlames(_ on: Bool, flicker: CGFloat) {
         for l in legs {

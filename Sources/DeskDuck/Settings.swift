@@ -30,6 +30,18 @@ final class DuckSettings: ObservableObject {
     @Published var curiosity: Double { didSet { d.set(curiosity, forKey: "curiosity") } }
     @Published var surfing: Double { didSet { d.set(surfing, forKey: "surfing") } }
 
+    // Mischief
+    @Published var mischief: Double { didSet { d.set(mischief, forKey: "mischief") } }
+    @Published var iconHeist: Bool { didSet { d.set(iconHeist, forKey: "iconHeist") } }
+    @Published var buttonSquat: Bool { didSet { d.set(buttonSquat, forKey: "buttonSquat") } }
+    @Published var cursorHeist: Bool { didSet { d.set(cursorHeist, forKey: "cursorHeist") } }
+    @Published var hideAndSeek: Bool { didSet { d.set(hideAndSeek, forKey: "hideAndSeek") } }
+    @Published var footprints: Bool { didSet { d.set(footprints, forKey: "footprints") } }
+    @Published var caughtRedHanded: Bool { didSet { d.set(caughtRedHanded, forKey: "caughtRedHanded") } }
+    @Published var windowBounce: Bool { didSet { d.set(windowBounce, forKey: "windowBounce") } }
+    /// How many desktop icons the duck has moved away from home (not persisted here; the duck keeps the list).
+    @Published var strayIcons = 0
+
     // Size runs from 0.4x to a comical 6x on a log scale, so the everyday range gets most of the slider.
     static let minSize = 0.4, maxSize = 6.0
     static func size(fromSlider t: Double) -> Double { minSize * pow(maxSize / minSize, min(max(t, 0), 1)) }
@@ -52,6 +64,8 @@ final class DuckSettings: ObservableObject {
         d.register(defaults: DuckSettings.personalityDefaults.merging([
             "theme": 0, "size": 1.0, "volume": 0.7, "muted": false,
             "useIcons": true, "useWindowTops": true, "useAppContent": true, "wakeWebContent": false, "moveIcons": true,
+            "mischief": 0.5, "iconHeist": true, "buttonSquat": true, "cursorHeist": true, "hideAndSeek": true,
+            "footprints": true, "caughtRedHanded": true, "windowBounce": false,
         ]) { a, _ in a })
         theme = min(max(d.integer(forKey: "theme"), 0), DuckTheme.all.count - 1)
         size = min(max(d.double(forKey: "size"), DuckSettings.minSize), DuckSettings.maxSize)
@@ -71,6 +85,14 @@ final class DuckSettings: ObservableObject {
         naps = d.double(forKey: "naps")
         curiosity = d.double(forKey: "curiosity")
         surfing = d.double(forKey: "surfing")
+        mischief = d.double(forKey: "mischief")
+        iconHeist = d.bool(forKey: "iconHeist")
+        buttonSquat = d.bool(forKey: "buttonSquat")
+        cursorHeist = d.bool(forKey: "cursorHeist")
+        hideAndSeek = d.bool(forKey: "hideAndSeek")
+        footprints = d.bool(forKey: "footprints")
+        caughtRedHanded = d.bool(forKey: "caughtRedHanded")
+        windowBounce = d.bool(forKey: "windowBounce")
     }
 
     /// Everything back to how it shipped (permissions live in System Settings and aren't touched).
@@ -78,6 +100,8 @@ final class DuckSettings: ObservableObject {
         resetPersonality()
         theme = 0; size = 1.0; volume = 0.7; muted = false
         useIcons = true; useWindowTops = true; useAppContent = true; wakeWebContent = false; moveIcons = true
+        mischief = 0.5; iconHeist = true; buttonSquat = true; cursorHeist = true; hideAndSeek = true
+        footprints = true; caughtRedHanded = true; windowBounce = false
     }
 
     func resetPersonality() {

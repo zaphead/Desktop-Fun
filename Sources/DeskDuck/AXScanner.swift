@@ -10,6 +10,7 @@ final class AXScanner {
         let elapsed: Double          // seconds the scan took
         let windowFrame: CGRect      // global, top-left origin (Quartz coords)
         let rects: [CGRect]          // element frames, same coords
+        let buttons: [CGRect]        // the subset that are buttons
     }
 
     var wakeWebContent = false
@@ -25,6 +26,7 @@ final class AXScanner {
         "AXSegmentedControl", "AXSlider", "AXProgressIndicator", "AXTabButton", "AXDisclosureTriangle",
         "AXColorWell", "AXLevelIndicator", "AXIncrementor", "AXSearchField",
     ]
+    private static let buttonRoles: Set<String> = ["AXButton", "AXPopUpButton", "AXMenuButton"]
     private static let chromiumBrowsers: Set<String> = [
         "com.google.Chrome", "com.google.Chrome.canary", "company.thebrowser.Browser", "com.brave.Browser",
         "com.microsoft.edgemac", "com.vivaldi.Vivaldi", "com.operasoftware.Opera",
@@ -87,6 +89,7 @@ final class AXScanner {
         guard let wf = frame(of: window), wf.width > 100, wf.height > 80 else { return nil }
 
         var rects: [CGRect] = []
+        var buttons: [CGRect] = []
         var queueEls: [(AXUIElement, Int)] = [(window, 0)]
         var head = 0
         let start = CACurrentMediaTime()
@@ -108,13 +111,56 @@ final class AXScanner {
                 if solidRoles.contains(role), r.width >= 30, r.height >= 12, r.height <= 420,
                    r.width <= wf.width * 0.97, wf.insetBy(dx: -2, dy: -2).contains(CGPoint(x: r.midX, y: r.minY + 1)) {
                     rects.append(r)
+                    if buttonRoles.contains(role), r.width >= 24, r.width <= 240, r.height >= 14, r.height <= 70 {
+                        buttons.append(r)
+                    }
                 }
             }
             if depth < 60, let kids = values[3] as? [AXUIElement] {
                 for k in kids.prefix(400) { queueEls.append((k, depth + 1)) }
             }
         }
-        return Result(pid: pid, elapsed: CACurrentMediaTime() - start, windowFrame: wf, rects: rects)
+        return Result(pid: pid, elapsed: CACurrentMediaTime() - start, windowFrame: wf, rects: rects, buttons: buttons)
+    }
+
+    // MARK: Moving windows (only used by the opt-in Window Bounce prank)
+
+    private static let windowQueue = DispatchQueue(label: "duck.ax-window", qos: .userInitiated)
+
+    private static func window(pid: pid_t, matching f: CGRect) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.25)
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &ref) == .success,
+              let wins = ref as? [AXUIElement] else { return nil }
+        return wins.first { w in
+            guard let r = frame(of: w) else { return false }
+            return abs(r.minX - f.minX) < 4 && abs(r.minY - f.minY) < 14 && abs(r.width - f.width) < 4
+        }
+    }
+
+    private static func setPosition(_ w: AXUIElement, _ p: CGPoint) {
+        var pt = p
+        if let v = AXValueCreate(.cgPoint, &pt) { AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, v) }
+    }
+
+    /// Dips a window down by `dy` points and springs it back to `frame`'s exact position.
+    static func bounceWindow(pid: pid_t, frame: CGRect, dy: CGFloat) {
+        windowQueue.async {
+            guard let w = window(pid: pid, matching: frame) else { return }
+            setPosition(w, CGPoint(x: frame.minX, y: frame.minY + dy))
+            usleep(70_000)
+            setPosition(w, CGPoint(x: frame.minX, y: frame.minY + dy * 0.3))
+            usleep(50_000)
+            setPosition(w, frame.origin)
+        }
+    }
+
+    /// Puts a window back exactly where it started.
+    static func restoreWindow(pid: pid_t, frame: CGRect) {
+        windowQueue.async {
+            if let w = window(pid: pid, matching: frame) { setPosition(w, frame.origin) }
+        }
     }
 
     private static func frame(of el: AXUIElement) -> CGRect? {

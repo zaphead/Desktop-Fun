@@ -7,81 +7,155 @@ final class DuckController: NSObject {
     // MARK: Collaborators
     let world: World
     let quacker = Quacker()
-    private let mover = IconMover()
-    private let scene: DuckScene
-    private let panel: DuckPanel
-    private let view: DuckView
-    private var link: CADisplayLink?
+    let mover = IconMover()
+    let scene: DuckScene
+    let panel: DuckPanel
+    let view: DuckView
+    var link: CADisplayLink?
     var menuProvider: (() -> NSMenu)?
 
     // MARK: Settings
     let settings: DuckSettings
-    private let scanner = AXScanner()
+    let scanner = AXScanner()
     private(set) var sizeMul: CGFloat = 1
-    private var unit: CGFloat { 7.6 * sizeMul }                 // points per model unit
-    private var hc: CGFloat { DuckRig.centerHeight * unit }     // body center to soles
-    private var panelSize: CGFloat { 160 * sizeMul }
-    private let gravity: CGFloat = 1900
+    var unit: CGFloat { 7.6 * sizeMul }                 // points per model unit
+    var hc: CGFloat { DuckRig.centerHeight * unit }     // body center to soles
+    var panelSize: CGFloat { 160 * sizeMul }
+    let gravity: CGFloat = 1900
 
     // MARK: Body state
-    private enum State { case idle, walk, crouch, air, land, sit, hang, held, quack, surf }
-    private var state: State = .air
-    private var stateT: Double = 0
-    private var stateDur: Double = 0
-    private var pos = CGPoint.zero          // body center
-    private var vel = CGVector.zero
-    private var groundID: String?
-    private var groundX0: CGFloat?
-    private var onCeiling = false
-    private var facing: CGFloat = 1
-    private var yawVis: CGFloat = 0
-    private var roll: CGFloat = 0
-    private var spin: CGFloat = 0
-    private var flip: (from: CGFloat, by: CGFloat, dur: Double)?
-    private var airT: Double = 0
-    private var rocket = false
-    private var ceilingTarget: Platform?
-    private var pendingLaunch: CGVector?
-    private var hardLanding = false
-    private var walkTarget: CGFloat = 0
-    private var walkOffEdge = false
-    private var goal: CGPoint?
-    private var goalSince: Double = 0
-    private var walkPhase: CGFloat = 0
-    private var asleep = false
-    private var zTimer: Double = 0
+    enum State { case idle, walk, crouch, air, land, sit, hang, held, quack, surf, prank, hide, dance, innocent }
+    var state: State = .air
+    var stateT: Double = 0
+    var stateDur: Double = 0
+    var pos = CGPoint.zero          // body center
+    var vel = CGVector.zero
+    var groundID: String?
+    var groundX0: CGFloat?
+    var onCeiling = false
+    var facing: CGFloat = 1
+    var yawVis: CGFloat = 0
+    var roll: CGFloat = 0
+    var spin: CGFloat = 0
+    var flip: (from: CGFloat, by: CGFloat, dur: Double)?
+    var airT: Double = 0
+    var rocket = false
+    var ceilingTarget: Platform?
+    var pendingLaunch: CGVector?
+    var hardLanding = false
+    var walkTarget: CGFloat = 0
+    var walkOffEdge = false
+    /// Height of the surface an aimed jump is going for; it falls through anything above that on the way.
+    var jumpTargetY: CGFloat?
+    var gait: Gait = .tiptoe
+
+    /// Different ways of getting around. Speed is relative to the normal tiptoe; `cadence` scales step rate.
+    enum Gait: CaseIterable {
+        case tiptoe, waddle, strut, scurry, sneak, skip, moonwalk
+        var speed: CGFloat {
+            switch self {
+            case .tiptoe: 1.0
+            case .waddle: 0.8
+            case .strut: 1.15
+            case .scurry: 2.7
+            case .sneak: 0.55
+            case .skip: 1.45
+            case .moonwalk: 0.75
+            }
+        }
+        var cadence: CGFloat {
+            switch self {
+            case .tiptoe: 1.0
+            case .waddle: 1.0
+            case .strut: 0.55
+            case .scurry: 0.9
+            case .sneak: 0.6
+            case .skip: 0.75
+            case .moonwalk: 0.8
+            }
+        }
+    }
+
+    /// Pick a walk style for a stroll of a given length.
+    func randomGait(distance: CGFloat) -> Gait {
+        if onCeiling { return Double.random(in: 0...1) < 0.8 ? .tiptoe : .waddle }
+        var options: [(Double, Gait)] = [(4, .tiptoe), (2, .waddle), (1.6, .strut), (1.1, .skip)]
+        options.append((distance > 400 ? 3 : 0.8, .scurry))
+        if distance > 120 { options.append((0.6, .moonwalk)) }
+        var r = Double.random(in: 0..<options.reduce(0) { $0 + $1.0 })
+        for (w, g) in options {
+            r -= w
+            if r < 0 { return g }
+        }
+        return .tiptoe
+    }
+    var goal: CGPoint?
+    var goalSince: Double = 0
+    var walkPhase: CGFloat = 0
+    var asleep = false
+    var zTimer: Double = 0
 
     // MARK: Animation state
-    private var pose = DuckPose()
-    private var time: Double = 0
-    private var lastTick: CFTimeInterval = 0
-    private var glance = CGPoint.zero
-    private var glanceTimer: Double = 0
-    private var blinkTimer: Double = 3
-    private var blinkT: Double = -1
-    private var billT: Double = -1
+    var pose = DuckPose()
+    var time: Double = 0
+    var lastTick: CFTimeInterval = 0
+    var glance = CGPoint.zero
+    var glanceTimer: Double = 0
+    var blinkTimer: Double = 3
+    var blinkT: Double = -1
+    var billT: Double = -1
 
     // MARK: Input
-    private var mouse = CGPoint.zero
-    private var mouseIdle: Double = 0
-    private var hovering = false
-    private var pressed = false
-    private var pressPoint = CGPoint.zero
-    private var grabOffset = CGVector.zero
-    private var dragHistory: [(t: Double, p: CGPoint)] = []
+    var mouse = CGPoint.zero
+    var mouseIdle: Double = 0
+    var hovering = false
+    var pressed = false
+    var pressPoint = CGPoint.zero
+    var grabOffset = CGVector.zero
+    var dragHistory: [(t: Double, p: CGPoint)] = []
 
     // MARK: Icon surfing
-    private struct Surf { let name: String; let from: CGPoint; let to: CGPoint; let dur: Double; let offsetX: CGFloat }
-    private var surf: Surf?
-    private var lastSurf: Double = -30
-    private var lastCeiling: Double = -30
+    struct Surf { let name: String; let from: CGPoint; let to: CGPoint; let dur: Double; let offsetX: CGFloat }
+    var surf: Surf?
+    var lastSurf: Double = -30
+    var lastCeiling: Double = -30
 
     // MARK: Timers
-    private var windowRefresh: Double = 0
-    private var iconRefresh: Double = 0
-    private var contentScan: Double = 0
-    private var lastGround: Platform?
-    private var lastScan = "-"
+    var windowRefresh: Double = 0
+    var iconRefresh: Double = 0
+    var contentScan: Double = 0
+    var lastGround: Platform?
+
+    // MARK: Mischief state (behavior lives in Mischief.swift)
+    var prank: Prank?
+    var pendingTry: Prank?
+    var prankDeadline: Double = 0
+    var lastMischief: Double = 0
+    var guiltyUntil: Double = -1
+    var heistJobs: [(name: String, dest: CGPoint)] = []
+    var heistFinaleX: CGFloat?
+    var heistAction: HeistAction = .none
+    var carried: String?
+    var carryFrom = CGPoint.zero
+    var carryBlend: CGFloat = 0
+    var toss: (name: String, from: CGPoint, to: CGPoint, t: Double)?
+    var squatting = false
+    var squatTarget: (id: String, x: CGFloat)?
+    var cursorPhase: CursorPhase = .approach
+    var cursorHeld = false
+    var cursorWarp: CGPoint?
+    var cursorGrabArmed = false
+    var hideSpot: (platformID: String, y: CGFloat, edge: CGFloat, dir: CGFloat)?
+    var hidePhase: HidePhase = .sneakIn
+    var hideNext: Double = 0
+    var bounceLeft = 0
+    var bounceWindow: (num: Int, pid: pid_t, orig: CGRect)?
+    var bounceTarget: String?
+    var muddySteps = 0
+    var lastStepIndex = 0
+    var innocentWhistled = false
+    let footprints = FootprintOverlay()
+    var lastScan = "-"
 
     init(settings: DuckSettings) {
         self.settings = settings
@@ -109,6 +183,16 @@ final class DuckController: NSObject {
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(appQuit(_:)),
                                                           name: NSWorkspace.didTerminateApplicationNotification, object: nil)
         applySettings()
+        // Debug builds of the experience: when the debug log is on, pranks can be triggered from the terminal.
+        if debugPath != nil {
+            DistributedNotificationCenter.default().addObserver(forName: Notification.Name("cloud.sharpstack.deskduck.try"),
+                                                                object: nil, queue: .main) { [weak self] n in
+                guard let name = n.object as? String else { return }
+                if name == "footprints" { self?.tryFootprints() }
+                else if name == "putback" { self?.putEverythingBack() }
+                else if let p = Prank(rawValue: name) { self?.tryPrank(p) }
+            }
+        }
         mouse = NSEvent.mouseLocation
         spawn(at: mouse)
     }
@@ -123,16 +207,16 @@ final class DuckController: NSObject {
         RunLoop.main.add(w, forMode: .common)
     }
 
-    private func attachDisplayLink() {
+    func attachDisplayLink() {
         link?.invalidate()
         let l = view.displayLink(target: self, selector: #selector(tick(_:)))
         l.add(to: .main, forMode: .common)
         link = l
     }
 
-    private var stalledSince: CFTimeInterval?
+    var stalledSince: CFTimeInterval?
 
-    private func watchdog() {
+    func watchdog() {
         guard panel.isVisible else { return }
         let now = CACurrentMediaTime()
         guard now - lastTick > 0.08 else { stalledSince = nil; return }
@@ -189,7 +273,7 @@ final class DuckController: NSObject {
         if let g = currentGround() { snap(to: g) }
     }
 
-    private func applySize() {
+    func applySize() {
         panel.setContentSize(NSSize(width: panelSize, height: panelSize))
         view.frame = NSRect(x: 0, y: 0, width: panelSize, height: panelSize)
         scene.cameraNode.camera?.orthographicScale = Double(panelSize / 2)
@@ -209,6 +293,7 @@ final class DuckController: NSObject {
 
     func summon() {
         endSurf()
+        abortPrank()
         spawn(at: NSEvent.mouseLocation)
         quacker.play("quack")
     }
@@ -220,7 +305,8 @@ final class DuckController: NSObject {
         quacker.play("quack")
     }
 
-    private func spawn(at p: CGPoint) {
+    func spawn(at p: CGPoint) {
+        jumpTargetY = nil
         let screen = world.screen(containing: p) ?? world.screens.first ?? .zero
         pos = CGPoint(x: min(max(p.x, screen.minX + 40), screen.maxX - 40), y: screen.maxY - 50)
         vel = CGVector(dx: 0, dy: -100)
@@ -236,14 +322,15 @@ final class DuckController: NSObject {
 
     @objc private func tick(_ l: CADisplayLink) { step() }
 
-    private func step() {
+    func step() {
         let now = CACurrentMediaTime()
         let dt = min(max(now - lastTick, 1.0 / 240), 1.0 / 20)
         lastTick = now
         time += dt
 
         let m = NSEvent.mouseLocation
-        if hypot(m.x - mouse.x, m.y - mouse.y) > 1 { mouseIdle = 0 } else { mouseIdle += dt }
+        let ours = cursorWarp.map { hypot(m.x - $0.x, m.y - $0.y) < 12 } ?? false
+        if hypot(m.x - mouse.x, m.y - mouse.y) > 1 && !ours { mouseIdle = 0 } else { mouseIdle += dt }
         mouse = m
 
         windowRefresh -= dt
@@ -267,7 +354,13 @@ final class DuckController: NSObject {
             scanContent()
         }
 
+        // Stereo: pan sounds by where the duck is across the whole row of screens.
+        if let minX = world.screens.map(\.minX).min(), let maxX = world.screens.map(\.maxX).max(), maxX > minX {
+            quacker.pan = Float(((pos.x - minX) / (maxX - minX) * 2 - 1) * 0.9)
+        }
+
         update(dt)
+        mischiefFrame(dt)
         animate(dt)
         render()
         view.draw(time: time)
@@ -275,17 +368,18 @@ final class DuckController: NSObject {
         debugLog()
     }
 
-    private var debugT: Double = 0
-    private lazy var debugPath = UserDefaults.standard.string(forKey: "debugLog")
+    var debugT: Double = 0
+    lazy var debugPath = UserDefaults.standard.string(forKey: "debugLog")
 
     /// `defaults write cloud.sharpstack.deskduck debugLog /path/to/file` to trace what the duck is doing.
-    private func debugLog() {
+    func debugLog() {
         guard let path = debugPath, time - debugT > 0.5 else { return }
         debugT = time
-        let line = String(format: "%.1f %@ pos=(%.0f,%.0f) ground=%@ ceil=%d roll=%.2f icons=%d iconFail=%d winTops=%d content=%d ax=%d scan=%@ surf=%@\n",
+        let line = String(format: "%.1f %@ pos=(%.0f,%.0f) ground=%@ ceil=%d roll=%.2f icons=%d iconFail=%d winTops=%d content=%d ax=%d scan=%@ surf=%@ prank=%@ gait=%@ carried=%@ cursor=%d\n",
                           time, "\(state)", pos.x, pos.y, groundID ?? "-", onCeiling ? 1 : 0, roll,
                           world.icons.count, world.iconLookupFailed ? 1 : 0, world.windowTops.count,
-                          world.contentPlatforms.count, AXScanner.isTrusted ? 1 : 0, lastScan, surf?.name ?? "-")
+                          world.contentPlatforms.count, AXScanner.isTrusted ? 1 : 0, lastScan, surf?.name ?? "-",
+                          prank?.rawValue ?? "-", "\(gait)", carried ?? toss?.name ?? "-", cursorHeld ? 1 : 0)
         if Int(time * 2) % 16 == 0 {
             if let img = view.duckRenderer.image(pixels: 360, time: time), let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
                let png = rep.representation(using: .png, properties: [:]) {
@@ -301,14 +395,14 @@ final class DuckController: NSObject {
 
     // MARK: State machine
 
-    private func enter(_ s: State, dur: Double = 0) {
+    func enter(_ s: State, dur: Double = 0) {
         state = s
         stateT = 0
         stateDur = dur
         if s != .sit { asleep = false }
     }
 
-    private func currentGround() -> Platform? {
+    func currentGround() -> Platform? {
         if let id = groundID, let p = world.platform(id: id) { return p }
         // The surface moved or was re-laid out (e.g. you scrolled): follow it if we can tell where it went.
         if let old = lastGround, groundID != nil, let p = world.replacement(for: old, near: pos.x, ceiling: onCeiling) {
@@ -319,7 +413,7 @@ final class DuckController: NSObject {
         return nil
     }
 
-    private func scanContent() {
+    func scanContent() {
         guard settings.useAppContent, AXScanner.isTrusted, panel.isVisible else {
             contentScan = 2
             return
@@ -334,11 +428,11 @@ final class DuckController: NSObject {
         }
     }
 
-    private func snap(to p: Platform) {
+    func snap(to p: Platform) {
         pos.y = onCeiling ? p.y - hc : p.y + hc
     }
 
-    private func update(_ dt: Double) {
+    func update(_ dt: Double) {
         stateT += dt
         switch state {
         case .held:
@@ -349,6 +443,9 @@ final class DuckController: NSObject {
             return
         case .surf:
             updateSurf(dt)
+            return
+        case .hide:
+            updateHide(dt)
             return
         default:
             break
@@ -368,24 +465,35 @@ final class DuckController: NSObject {
             if stateT >= stateDur { decide() }
         case .walk:
             // Big ducks lumber: speed grows slower than size, so strides get slow and heavy.
-            let speed: CGFloat = (onCeiling ? 50 : 74) * sqrt(sizeMul) * CGFloat(settings.walkSpeed)
+            let speed: CGFloat = (onCeiling ? 50 : 74) * sqrt(sizeMul) * CGFloat(settings.walkSpeed) * gait.speed
             let target = walkOffEdge ? walkTarget : min(max(walkTarget, g.x0 + 8), g.x1 - 8)
             let dx = target - pos.x
             if abs(dx) < 2 || stateT > 10 {
-                enter(.idle, dur: .random(in: 0.4...1.6))
+                enter(.idle, dur: prank != nil ? 0.1 : .random(in: 0.4...1.6))
             } else {
-                facing = dx > 0 ? 1 : -1
+                let dir: CGFloat = dx > 0 ? 1 : -1
+                facing = gait == .moonwalk ? -dir : dir     // moonwalking faces away from where it's going
                 let step = min(abs(dx), speed * CGFloat(dt))
-                pos.x += facing * step
-                walkPhase += CGFloat(dt) * speed / (13 * sizeMul) * .pi
+                pos.x += dir * step
+                walkPhase += CGFloat(dt) * speed / (13 * sizeMul) * .pi * gait.cadence
             }
         case .crouch:
             if stateT >= stateDur, let v = pendingLaunch { launch(v) }
         case .land:
-            if stateT >= stateDur { enter(.idle, dur: hardLanding ? 1.2 : .random(in: 0.3...1.2)); hardLanding = false }
+            if stateT >= stateDur {
+                enter(.idle, dur: hardLanding ? 1.2 : (prank != nil ? 0.12 : .random(in: 0.3...1.2)))
+                hardLanding = false
+            }
         case .quack:
             if stateT >= stateDur { enter(onCeiling ? .hang : .idle, dur: .random(in: 0.5...1.5)) }
+        case .prank:
+            if stateT >= stateDur { prankActionDone() }
+        case .dance, .innocent:
+            if state == .innocent && stateT > 0.9 && !innocentWhistled { innocentWhistled = true; quacker.play("whistle", volume: 0.3) }
+            if state == .dance { yawVis += CGFloat(dt) * (stateT < 1.1 ? 9 : 0) }
+            if stateT >= stateDur { enter(.idle, dur: 0.6) }
         case .sit:
+            if squatting { updateSquat(); break }
             if stateT > 1.2 && !asleep { asleep = true }
             if asleep {
                 zTimer -= dt
@@ -400,15 +508,16 @@ final class DuckController: NSObject {
         }
     }
 
-    private func wake() {
+    func wake() {
         asleep = false
         quacker.play("chirp")
         enter(.idle, dur: 0.8)
     }
 
     /// Pick what to do next, weighted by what's possible from here.
-    private func decide() {
+    func decide() {
         guard let g = currentGround() else { return startFall() }
+        if prankStep(g) { return }
         if onCeiling {
             if Double.random(in: 0...1) < 0.6 && g.width > 90 {
                 let x = min(max(pos.x + .random(in: -420...420), g.x0 + 20), g.x1 - 20)
@@ -427,6 +536,8 @@ final class DuckController: NSObject {
             if pursueGoal(from: g, to: gl) { return }
             goal = nil
         }
+
+        if maybeStartMischief(g) { return }
 
         var options: [(Double, () -> Void)] = []
         let calm = 1.5 - settings.energy          // 1.5 (sleepy) ... 0.5 (hyper)
@@ -464,16 +575,18 @@ final class DuckController: NSObject {
         options.last?.1()
     }
 
-    private func walk(to x: CGFloat, offEdge: Bool = false) {
+    func walk(to x: CGFloat, offEdge: Bool = false, gait chosen: Gait? = nil) {
         walkTarget = x
         walkOffEdge = offEdge
+        gait = chosen ?? randomGait(distance: abs(x - pos.x))
+        if gait == .scurry && Double.random(in: 0...1) < 0.35 { quacker.play("beepbeep", volume: 0.25) }
         enter(.walk)
     }
 
     // MARK: Wandering
 
     /// Pick somewhere worth going, preferring far-away spots (other windows, other screens).
-    private func pickGoal() {
+    func pickGoal() {
         let feet = pos.y - hc
         let spots = world.allStandable.filter { $0.width > 30 && hypot($0.midX - pos.x, $0.y - feet) > 350 }
         guard let p = spots.randomElement() ?? world.allStandable.randomElement() else { return }
@@ -482,7 +595,7 @@ final class DuckController: NSObject {
     }
 
     /// Take one step toward the current goal. Returns false if there's no sensible move.
-    private func pursueGoal(from g: Platform, to gl: CGPoint) -> Bool {
+    func pursueGoal(from g: Platform, to gl: CGPoint) -> Bool {
         let feet = g.y
         func dist(_ x: CGFloat, _ y: CGFloat) -> CGFloat { hypot(gl.x - x, (gl.y - y) * 1.3) }
         let here = dist(pos.x, feet)
@@ -518,7 +631,7 @@ final class DuckController: NSObject {
 
     // MARK: Jumping
 
-    private func jumpTargets(from g: Platform, rocket: Bool) -> [(Platform, CGFloat)] {
+    func jumpTargets(from g: Platform, rocket: Bool) -> [(Platform, CGFloat)] {
         let reach = CGFloat(0.75 + 0.5 * settings.jumpiness)
         let feet = g.y
         var out: [(Platform, CGFloat)] = []
@@ -538,7 +651,7 @@ final class DuckController: NSObject {
         return out
     }
 
-    private func jump(to target: (Platform, CGFloat), rocket isRocket: Bool) {
+    func jump(to target: (Platform, CGFloat), rocket isRocket: Bool) {
         guard let g = currentGround() else { return }
         let dx = target.1 - pos.x, dy = target.0.y - g.y
         let h = max(dy, 0) + (isRocket ? 150 : 40 + 0.12 * abs(dx))
@@ -548,13 +661,14 @@ final class DuckController: NSObject {
         facing = dx >= 0 ? 1 : -1
         rocket = isRocket
         ceilingTarget = nil
+        jumpTargetY = target.0.y
         let flips = (isRocket ? 0.45 : (h > 100 ? 0.15 : 0)) > Double.random(in: 0...1)
         flip = flips ? (0, -facing * 2 * .pi, Double(t) * 0.75) : nil
         pendingLaunch = v
         enter(.crouch, dur: isRocket ? 0.4 : 0.17)
     }
 
-    private func reachableCeiling() -> Platform? {
+    func reachableCeiling() -> Platform? {
         let options = world.ceilings.filter { c in
             let h = c.y - hc - pos.y
             let tx = min(max(pos.x, c.x0 + 20), c.x1 - 20)
@@ -564,7 +678,7 @@ final class DuckController: NSObject {
         return options.first { $0.id.hasSuffix("notch") } ?? options.randomElement()
     }
 
-    private func jumpToCeiling(_ c: Platform) {
+    func jumpToCeiling(_ c: Platform) {
         let tx = min(max(pos.x + .random(in: -160...160), c.x0 + 20), c.x1 - 20)
         let h = (c.y - hc) - pos.y
         let vy = sqrt(2 * gravity * h)
@@ -572,12 +686,13 @@ final class DuckController: NSObject {
         facing = tx >= pos.x ? 1 : -1
         rocket = h > 240
         ceilingTarget = c
+        jumpTargetY = nil
         flip = (0, -facing * .pi, Double(t) * 0.95)
         pendingLaunch = CGVector(dx: (tx - pos.x) / t, dy: vy)
         enter(.crouch, dur: rocket ? 0.4 : 0.2)
     }
 
-    private func launch(_ v: CGVector) {
+    func launch(_ v: CGVector) {
         vel = v
         groundID = nil
         groundX0 = nil
@@ -588,7 +703,8 @@ final class DuckController: NSObject {
         enter(.air)
     }
 
-    private func startFall() {
+    func startFall() {
+        jumpTargetY = nil
         groundID = nil
         groundX0 = nil
         vel = state == .walk ? CGVector(dx: facing * 70 * sizeMul, dy: 60) : CGVector(dx: vel.dx * 0.3, dy: 0)
@@ -602,7 +718,8 @@ final class DuckController: NSObject {
         enter(.air)
     }
 
-    private func dropFromCeiling() {
+    func dropFromCeiling() {
+        jumpTargetY = nil
         onCeiling = false
         groundID = nil
         groundX0 = nil
@@ -615,7 +732,7 @@ final class DuckController: NSObject {
         enter(.air)
     }
 
-    private func updateAir(_ dt: Double) {
+    func updateAir(_ dt: Double) {
         airT += dt
         let prev = pos
         vel.dy -= gravity * CGFloat(dt)
@@ -660,6 +777,7 @@ final class DuckController: NSObject {
             let feetPrev = prev.y - hc, feetNow = pos.y - hc
             let hits = world.allStandable.filter { p in
                 pos.x >= p.x0 - 2 && pos.x <= p.x1 + 2 && feetPrev >= p.y - 1 && feetNow <= p.y
+                    && p.y <= (jumpTargetY ?? .infinity) + 2
             }
             if let p = hits.max(by: { $0.y < $1.y }) {
                 land(on: p)
@@ -673,8 +791,10 @@ final class DuckController: NSObject {
         }
     }
 
-    private func land(on p: Platform) {
+    func land(on p: Platform) {
+        jumpTargetY = nil
         let impact = -vel.dy
+        let wasRocket = rocket
         groundID = p.id
         groundX0 = p.x0
         onCeiling = false
@@ -687,6 +807,7 @@ final class DuckController: NSObject {
         hardLanding = impact > 1500 || abs(roll) > 1.2
         if hardLanding || sizeMul > 2.5 { quacker.play("bonk", volume: sizeMul > 2.5 ? 0.4 : 0.25) }   // giants stomp
         enter(.land, dur: hardLanding ? 0.5 : 0.16)
+        didLand(on: p, impact: impact, wasRocket: wasRocket)
     }
 
     // MARK: Being picked up
@@ -701,7 +822,9 @@ final class DuckController: NSObject {
         let m = NSEvent.mouseLocation
         if state != .held && hypot(m.x - pressPoint.x, m.y - pressPoint.y) > 4 {
             endSurf()
+            abortPrank()
             grabOffset = CGVector(dx: pos.x - pressPoint.x, dy: pos.y - pressPoint.y)
+            jumpTargetY = nil
             onCeiling = false
             groundID = nil
             flip = nil
@@ -728,6 +851,8 @@ final class DuckController: NSObject {
             if s > 900 { quacker.play("wee", volume: 0.3) }
             enter(.air)
         } else {
+            if state == .hide { return foundWhileHiding() }
+            if squatting { return squatFlee() }
             // A simple click: quack, or a startled wake-up hop.
             if state == .sit { wake() }
             quackNow()
@@ -741,7 +866,7 @@ final class DuckController: NSObject {
         }
     }
 
-    private func updateHeld(_ dt: Double) {
+    func updateHeld(_ dt: Double) {
         let m = NSEvent.mouseLocation
         let target = CGPoint(x: m.x + grabOffset.dx, y: m.y + grabOffset.dy)
         let dx = target.x - pos.x
@@ -756,7 +881,7 @@ final class DuckController: NSObject {
 
     // MARK: Icon surfing
 
-    private func startSurf(on g: Platform) {
+    func startSurf(on g: Platform) {
         guard let name = g.iconName, let icon = world.icons.first(where: { $0.name == name }),
               let screen = NSScreen.screens.first?.visibleFrame else { return enter(.idle, dur: 1) }
         let others = world.icons.filter { $0.name != name }.map(\.center)
@@ -773,6 +898,7 @@ final class DuckController: NSObject {
         }
         guard let to = dest else { return enter(.idle, dur: 1) }
         lastSurf = time
+        recordHome(name)
         world.lockedIcon = name
         mover.begin(iconName: name)
         let dist = hypot(to.x - icon.center.x, to.y - icon.center.y)
@@ -783,7 +909,7 @@ final class DuckController: NSObject {
         enter(.surf)
     }
 
-    private func updateSurf(_ dt: Double) {
+    func updateSurf(_ dt: Double) {
         guard let s = surf else { return enter(.idle, dur: 0.5) }
         let windup = 0.35
         let t = max(0, (stateT - windup) / s.dur)
@@ -804,7 +930,7 @@ final class DuckController: NSObject {
         }
     }
 
-    private func endSurf() {
+    func endSurf() {
         guard let s = surf else { return }
         surf = nil
         mover.end()
@@ -816,7 +942,7 @@ final class DuckController: NSObject {
 
     // MARK: Animation
 
-    private func animate(_ dt: Double) {
+    func animate(_ dt: Double) {
         var p = DuckPose()
         let t = time
 
@@ -826,18 +952,12 @@ final class DuckController: NSObject {
         if blinkT >= 0 { blinkT += dt; if blinkT > 0.16 { blinkT = -1 } }
 
         switch state {
-        case .idle, .hang, .quack:
+        case .idle, .hang, .quack, .hide:
             p.neckLean = 0.25 + 0.03 * CGFloat(sin(t * 2.1))
             p.left.thigh += 0.02 * CGFloat(sin(t * 2.1))
             p.right.thigh += 0.02 * CGFloat(sin(t * 2.1))
         case .walk:
-            let ph = walkPhase
-            p.left = .init(thigh: 0.38 + 0.36 * sin(ph), knee: 0.72 + 0.6 * max(0, cos(ph)))
-            p.right = .init(thigh: 0.38 + 0.36 * sin(ph + .pi), knee: 0.72 + 0.6 * max(0, cos(ph + .pi)))
-            p.pelvisRoll = 0.07 * sin(ph)
-            p.pelvisPitch = 0.06
-            p.neckLean = 0.36 + 0.05 * sin(2 * ph)
-            p.headRoll = -0.05 * sin(ph)
+            walkPose(&p, walkPhase)
         case .crouch:
             p.left = .init(thigh: 0.85, knee: 1.6)
             p.right = p.left
@@ -876,6 +996,25 @@ final class DuckController: NSObject {
             p.neckBend = -0.15 - 0.2 * CGFloat(doze)
             p.headPitch = -0.45 * CGFloat(doze) + 0.03 * CGFloat(sin(t * 1.3))
             p.iris = asleep ? 0.12 : 1
+            if squatting { p.iris = 0.62; p.headPitch = 0.22; p.neckLean = 0.35; p.neckBend = -0.1 }
+        case .prank:
+            p.left = .init(thigh: 0.8, knee: 1.5)
+            p.right = p.left
+            p.neckLean = 0.75
+            p.headPitch = -0.45
+            p.billOpen = 0.5
+        case .dance:
+            let k = CGFloat(t * 13)
+            p.left = .init(thigh: 0.4 + 0.45 * max(0, sin(k)), knee: 0.8 + 0.8 * max(0, sin(k)))
+            p.right = .init(thigh: 0.4 + 0.45 * max(0, sin(k + .pi)), knee: 0.8 + 0.8 * max(0, sin(k + .pi)))
+            p.pelvisRoll = 0.12 * sin(k)
+            p.headRoll = 0.25 * sin(k / 2)
+            p.headPitch = 0.35
+            p.billOpen = 0.35 + 0.2 * sin(k * 1.5)
+        case .innocent:
+            p.neckLean = 0.2
+            p.headPitch = 0.12
+            p.iris = stateT > 0.6 ? 1.15 : 1
         case .held:
             let k = CGFloat(t * 11)
             p.left = .init(thigh: 0.15 + 0.45 * sin(k), knee: 0.35 + 0.4 * max(0, sin(k + 1)))
@@ -903,7 +1042,15 @@ final class DuckController: NSObject {
             p.headPitch += s * 0.6 * tanh(dy / 200)
             if watching && mouseIdle > 0.6 { p.iris = 0.82 + 0.05 * CGFloat(sin(t * 3)) }
         }
-        if blinkT >= 0 && !asleep { p.iris = 0.1 }
+        // Caught red-handed: freeze, slowly look right at you, then shifty glances while whistling.
+        if state == .innocent {
+            let u = stateT
+            let atYou = -yawVis
+            p.headYaw = u < 0.6 ? pose.headYaw : (u < 1.4 ? atYou * CGFloat(min(1, (u - 0.6) / 0.8)) : atYou + 0.5 * (sin(t * 3.2) > 0 ? 1 : -1))
+            p.headPitch = u < 1.4 ? 0.1 : 0.25
+        }
+        if carried != nil || cursorHeld { p.billOpen = max(p.billOpen, 0.32) }
+        if blinkT >= 0 && !asleep && state != .innocent { p.iris = 0.1 }
         if billT >= 0 {
             billT += dt
             p.billOpen = max(p.billOpen, 0.5 * CGFloat(sin(min(1, billT / 0.18) * .pi)) +
@@ -912,17 +1059,83 @@ final class DuckController: NSObject {
         }
 
         // Smoothly blend toward the target pose.
-        let k = CGFloat(min(1, dt * (state == .walk ? 22 : 13)))
+        let k = CGFloat(min(1, dt * (state == .walk ? (gait == .scurry ? 40 : 22) : 13)))
         pose = DuckPose.mix(pose, p, k)
+        if state == .walk && gait == .scurry { pose.left = p.left; pose.right = p.right }   // wheel legs wrap around
 
         // Body yaw: 3/4 view toward the travel direction, more frontal when standing around.
-        let frontal = [.idle, .sit, .quack, .hang].contains(state)
+        let frontal = [.idle, .sit, .quack, .hang, .hide].contains(state)
         let s: CGFloat = cos(roll) >= 0 ? 1 : -1
-        let yawTarget = s * facing * (frontal ? 0.4 : 0.85)
-        yawVis += (yawTarget - yawVis) * CGFloat(min(1, dt * 7))
+        let side: CGFloat = state == .walk && gait == .scurry ? 1.2 : 0.85
+        let yawTarget = state == .innocent ? 0 : s * facing * (frontal ? 0.4 : side)
+        if state == .dance && stateT < 1.1 { return }   // spinning: yaw is driven directly
+        if state == .dance { yawVis = yawVis.remainder(dividingBy: 2 * .pi) }
+        yawVis += (yawTarget - yawVis) * CGFloat(min(1, dt * (state == .innocent ? 3 : 7)))
     }
 
-    private func render() {
+    /// Leg and body motion for each walk style.
+    func walkPose(_ p: inout DuckPose, _ ph: CGFloat) {
+        switch gait {
+        case .tiptoe:
+            p.left = .init(thigh: 0.38 + 0.36 * sin(ph), knee: 0.72 + 0.6 * max(0, cos(ph)))
+            p.right = .init(thigh: 0.38 + 0.36 * sin(ph + .pi), knee: 0.72 + 0.6 * max(0, cos(ph + .pi)))
+            p.pelvisRoll = 0.07 * sin(ph)
+            p.pelvisPitch = 0.06
+            p.neckLean = 0.36 + 0.05 * sin(2 * ph)
+            p.headRoll = -0.05 * sin(ph)
+        case .waddle:
+            p.left = .init(thigh: 0.36 + 0.2 * sin(ph), knee: 0.72 + 0.35 * max(0, cos(ph)))
+            p.right = .init(thigh: 0.36 + 0.2 * sin(ph + .pi), knee: 0.72 + 0.35 * max(0, cos(ph + .pi)))
+            p.pelvisRoll = 0.22 * sin(ph)
+            p.headRoll = -0.18 * sin(ph)
+            p.neckLean = 0.3
+        case .strut:
+            // Huge cartoon strides, chest out, head bobbing like a pigeon.
+            p.left = .init(thigh: 0.3 + 0.95 * sin(ph), knee: 0.45 + 1.15 * max(0, cos(ph)), foot: -0.2 * max(0, cos(ph)))
+            p.right = .init(thigh: 0.3 + 0.95 * sin(ph + .pi), knee: 0.45 + 1.15 * max(0, cos(ph + .pi)), foot: -0.2 * max(0, cos(ph + .pi)))
+            p.pelvisPitch = -0.12
+            p.pelvisRoll = 0.05 * sin(ph)
+            p.neckLean = 0.05 + 0.2 * sin(2 * ph)
+            p.headPitch = 0.25
+            p.lift = 0.15 * abs(cos(ph))
+        case .scurry:
+            // Legs spin around like wheels.
+            let w = ph.remainder(dividingBy: 2 * .pi)
+            p.left = .init(thigh: w, knee: 0.7 + 0.5 * max(0, sin(ph)))
+            p.right = .init(thigh: (w + .pi).remainder(dividingBy: 2 * .pi), knee: 0.7 + 0.5 * max(0, sin(ph + .pi)))
+            p.pelvisPitch = 0.3
+            p.neckLean = 0.75
+            p.neckBend = 0.05
+            p.headPitch = 0.3
+            p.billOpen = 0.2
+            p.lift = 0.25 + 0.1 * sin(2 * ph)
+        case .sneak:
+            // Crouched, exaggerated high-knee tiptoe.
+            p.left = .init(thigh: 0.85 + 0.45 * sin(ph), knee: 1.5 + 0.7 * max(0, cos(ph)), foot: -0.3)
+            p.right = .init(thigh: 0.85 + 0.45 * sin(ph + .pi), knee: 1.5 + 0.7 * max(0, cos(ph + .pi)), foot: -0.3)
+            p.pelvisPitch = 0.18
+            p.neckLean = 0.65
+            p.headPitch = -0.05
+            p.headRoll = 0.08 * sin(ph)
+        case .skip:
+            p.left = .init(thigh: 0.55 + 0.5 * sin(ph), knee: 0.8 + 0.9 * max(0, sin(ph + 0.6)))
+            p.right = .init(thigh: 0.55 + 0.5 * sin(ph + .pi), knee: 0.8 + 0.9 * max(0, sin(ph + .pi + 0.6)))
+            p.lift = 1.1 * abs(sin(ph))
+            p.neckLean = 0.2
+            p.headPitch = 0.2
+            p.headRoll = 0.12 * sin(ph)
+            p.billOpen = 0.15
+        case .moonwalk:
+            // One leg slides back flat while the other rests on its toes.
+            p.left = .init(thigh: 0.15 - 0.3 * sin(ph), knee: 0.35 + 0.9 * max(0, sin(ph)), foot: -0.6 * max(0, sin(ph)))
+            p.right = .init(thigh: 0.15 - 0.3 * sin(ph + .pi), knee: 0.35 + 0.9 * max(0, sin(ph + .pi)), foot: -0.6 * max(0, sin(ph + .pi)))
+            p.neckLean = 0.2
+            p.headPitch = 0.15
+            p.headRoll = 0.1 * sin(2 * ph)
+        }
+    }
+
+    func render() {
         let rig = scene.rig
         let grounded = ![.air, .held].contains(state)
         rig.apply(pose: pose, grounded: grounded)
@@ -958,7 +1171,7 @@ final class DuckController: NSObject {
 
     // MARK: Hover / click-through
 
-    private func updateHover() {
+    func updateHover() {
         if state == .held || pressed {
             panel.ignoresMouseEvents = false
             return
@@ -973,6 +1186,7 @@ final class DuckController: NSObject {
         let head = abs(lx - headSide * 6 * s) < 22 * s && ly > 14 * s && ly < 44 * s
         let over = body || head
         if over != hovering {
+            if over { caughtRedHanded() }
             hovering = over
             panel.ignoresMouseEvents = !over
             if over { NSCursor.openHand.push() } else { NSCursor.pop() }
@@ -981,7 +1195,7 @@ final class DuckController: NSObject {
 
     // MARK: Sleepy Z's
 
-    private func spawnZ() {
+    func spawnZ() {
         let text = SCNText(string: "z", extrusionDepth: 1)
         text.font = NSFont.systemFont(ofSize: 14 * sizeMul, weight: .heavy)
         text.flatness = 0.2
@@ -1024,6 +1238,7 @@ extension DuckPose {
         o.billOpen = b.billOpen > a.billOpen ? m(a.billOpen, b.billOpen) * 0.5 + b.billOpen * 0.5 : m(a.billOpen, b.billOpen)
         o.iris = b.iris < 0.3 ? b.iris : m(a.iris, b.iris)
         o.sitting = m(a.sitting, b.sitting)
+        o.lift = m(a.lift, b.lift)
         return o
     }
 }

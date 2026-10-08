@@ -1,44 +1,64 @@
-import AppKit
+import AVFoundation
 
-/// Synthesized robot quacks — no audio files needed.
+/// Synthesized robot quacks, laughs and whistles (no audio files), panned left/right to follow the duck
+/// across your screens.
 final class Quacker {
     var muted = false
     var volumeScale: Float = 0.7
-    private var sounds: [String: [NSSound]] = [:]
+    /// -1 (far left of your desk) ... 1 (far right). Updated by the duck every frame.
+    var pan: Float = 0
+    private var sounds: [String: [Data]] = [:]
+    private var playing: [AVAudioPlayer] = []
 
     init() {
-        sounds["quack"] = (0..<4).map { i in Quacker.make(syllables: [(0.0, 0.13, 640 + Double(i) * 45), (0.15, 0.11, 560 + Double(i) * 40)]) }
-        sounds["chirp"] = (0..<3).map { i in Quacker.make(syllables: [(0.0, 0.07, 900 + Double(i) * 120)], sweep: 1.5) }
-        sounds["wee"] = [Quacker.make(syllables: [(0.0, 0.45, 520)], sweep: 1.9)]
-        sounds["boing"] = [Quacker.make(syllables: [(0.0, 0.16, 300)], sweep: 1.8, buzz: 0.1)]
-        sounds["bonk"] = [Quacker.make(syllables: [(0.0, 0.08, 180)], sweep: 0.6, buzz: 0.2)]
+        sounds["quack"] = (0..<4).map { i in Quacker.voice([(0.0, 0.13, 640 + Double(i) * 45, 0.7), (0.15, 0.11, 560 + Double(i) * 40, 0.7)]) }
+        sounds["chirp"] = (0..<3).map { i in Quacker.voice([(0.0, 0.07, 900 + Double(i) * 120, 1.5)]) }
+        sounds["wee"] = [Quacker.voice([(0.0, 0.45, 520, 1.9)])]
+        sounds["boing"] = [Quacker.voice([(0.0, 0.16, 300, 1.8)], buzz: 0.1)]
+        sounds["bonk"] = [Quacker.voice([(0.0, 0.08, 180, 0.6)], buzz: 0.2)]
+        sounds["beepbeep"] = [Quacker.voice([(0.0, 0.07, 1250, 1.05), (0.11, 0.07, 1250, 1.05)], buzz: 0.15)]
+        // Mischief: a quick "heh-heh" snicker and a longer cackle that runs down the scale.
+        sounds["snicker"] = (0..<3).map { i in
+            let f = 820 + Double(i) * 70
+            return Quacker.voice([(0.0, 0.05, f, 1.15), (0.08, 0.05, f * 1.04, 1.15), (0.16, 0.06, f * 1.08, 1.1)], buzz: 0.45)
+        }
+        sounds["laugh"] = (0..<3).map { i in
+            let f = 760 + Double(i) * 60
+            return Quacker.voice((0..<6).map { k in
+                (Double(k) * 0.085, 0.06, f * (1.12 - Double(k) * 0.045), 1.12)
+            }, buzz: 0.5)
+        }
+        sounds["whistle"] = [Quacker.whistle()]
     }
 
     func play(_ name: String, volume: Float = 0.35) {
-        guard !muted, let s = sounds[name]?.randomElement() else { return }
-        let copy = (s.copy() as? NSSound) ?? s
-        copy.volume = volume * volumeScale * 1.4
-        copy.play()
+        guard !muted, let data = sounds[name]?.randomElement(),
+              let p = try? AVAudioPlayer(data: data) else { return }
+        playing.removeAll { !$0.isPlaying }
+        p.volume = volume * volumeScale * 1.4
+        p.pan = max(-1, min(1, pan))
+        p.play()
+        playing.append(p)
     }
 
-    /// Builds a WAV of buzzy, nasal "quack" syllables: a pitch-swept pulse wave run through a
-    /// crude formant filter, with a robotic ring-mod on top.
-    private static func make(syllables: [(start: Double, dur: Double, f0: Double)], sweep: Double = 0.7, buzz: Double = 0.35) -> NSSound {
+    // MARK: Synthesis
+
+    /// Buzzy, nasal syllables: a pitch-swept pulse wave through a crude formant filter, plus a robotic ring-mod.
+    /// Each syllable is (start, duration, start pitch, pitch sweep multiplier).
+    private static func voice(_ syllables: [(Double, Double, Double, Double)], buzz: Double = 0.35) -> Data {
         let rate = 44100.0
-        let total = (syllables.map { $0.start + $0.dur }.max() ?? 0.2) + 0.02
-        let n = Int(total * rate)
-        var samples = [Float](repeating: 0, count: n)
-        for syl in syllables {
-            var phase = 0.0
-            var lp1 = 0.0, lp2 = 0.0
-            let s0 = Int(syl.start * rate), len = Int(syl.dur * rate)
-            for k in 0..<len where s0 + k < n {
+        let total = (syllables.map { $0.0 + $0.1 }.max() ?? 0.2) + 0.02
+        var samples = [Float](repeating: 0, count: Int(total * rate))
+        for (start, dur, f0, sweep) in syllables {
+            var phase = 0.0, lp1 = 0.0, lp2 = 0.0
+            let s0 = Int(start * rate), len = Int(dur * rate)
+            for k in 0..<len where s0 + k < samples.count {
                 let t = Double(k) / Double(len)
-                let f = syl.f0 * (1 + (sweep - 1) * t) * (1 + 0.04 * sin(t * 40))
+                let f = f0 * (1 + (sweep - 1) * t) * (1 + 0.04 * sin(t * 40))
                 phase += f / rate
                 let frac = phase - floor(phase)
-                var v = frac < 0.28 ? 1.0 : -0.4          // narrow pulse = nasal
-                v += 0.5 * sin(2 * .pi * phase * 3)       // emphasize 3rd harmonic like a duck formant
+                var v = frac < 0.28 ? 1.0 : -0.4
+                v += 0.5 * sin(2 * .pi * phase * 3)
                 lp1 += 0.35 * (v - lp1)
                 lp2 += 0.35 * (lp1 - lp2)
                 let ring = 1 - buzz + buzz * sin(2 * .pi * 70 * Double(k) / rate)
@@ -46,7 +66,26 @@ final class Quacker {
                 samples[s0 + k] += Float(lp2 * ring * env * 0.6)
             }
         }
-        return NSSound(data: wav(samples, rate: Int(rate)))!
+        return wav(samples, rate: Int(rate))
+    }
+
+    /// An innocent two-note "who, me?" whistle: pure tones gliding up, then down.
+    private static func whistle() -> Data {
+        let rate = 44100.0
+        let notes: [(Double, Double, Double, Double)] = [(0.0, 0.28, 1300, 1750), (0.34, 0.42, 1750, 1150)]
+        var samples = [Float](repeating: 0, count: Int(0.8 * rate))
+        for (start, dur, fa, fb) in notes {
+            var phase = 0.0
+            let s0 = Int(start * rate), len = Int(dur * rate)
+            for k in 0..<len where s0 + k < samples.count {
+                let t = Double(k) / Double(len)
+                let f = fa + (fb - fa) * t * t + 25 * sin(t * 50)   // slight vibrato
+                phase += f / rate
+                let env = min(1, t * 12) * min(1, (1 - t) * 6)
+                samples[s0 + k] += Float(sin(2 * .pi * phase) * env * 0.5)
+            }
+        }
+        return wav(samples, rate: Int(rate))
     }
 
     private static func wav(_ s: [Float], rate: Int) -> Data {

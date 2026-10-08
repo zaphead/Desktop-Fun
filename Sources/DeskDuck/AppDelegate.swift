@@ -16,7 +16,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         settingsWindow = SettingsWindowController(settings: settings, actions: .init(
             summon: { [weak self] in self?.duck.summon() },
-            quack: { [weak self] in self?.duck.quackNow() }))
+            quack: { [weak self] in self?.duck.quackNow() },
+            tryPrank: { [weak self] p in self?.duck.tryPrank(p) },
+            tryFootprints: { [weak self] in self?.duck.tryFootprints() },
+            putBack: { [weak self] in self?.duck.putEverythingBack() }))
+        settings.strayIcons = duck.iconHomes.count
 
         // Apply settings live as they change.
         settings.$theme.dropFirst().sink { [weak self] t in self?.duck.setTheme(DuckTheme.all[t]) }.store(in: &subscriptions)
@@ -56,6 +60,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         m.addItem(item(duck.isHidden ? "Show Duck" : "Hide Duck", #selector(toggleHidden)))
         m.addItem(.separator())
         m.addItem(sizeMenuItem())
+        m.addItem(.separator())
+        let mischief = NSMenu()
+        for p in Prank.allCases {
+            let it = item(p.title, #selector(tryPrank(_:)))
+            it.representedObject = p.rawValue
+            mischief.addItem(it)
+        }
+        mischief.addItem(item("Muddy Footprints", #selector(tryFootprints)))
+        let mischiefItem = NSMenuItem(title: "Make Mischief", action: nil, keyEquivalent: "")
+        mischiefItem.submenu = mischief
+        m.addItem(mischiefItem)
+        let back = item(settings.strayIcons > 0 ? "Put Everything Back (\(settings.strayIcons))" : "Put Everything Back",
+                        #selector(putBack))
+        back.isEnabled = settings.strayIcons > 0
+        m.addItem(back)
         m.addItem(.separator())
         let s = item("Settings…", #selector(openSettings))
         s.keyEquivalent = ","
@@ -99,5 +118,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func summon() { duck.summon() }
     @objc private func toggleHidden() { duck.setHidden(!duck.isHidden) }
     @objc private func openSettings() { settingsWindow.show() }
+    @objc private func tryPrank(_ s: NSMenuItem) {
+        if let raw = s.representedObject as? String, let p = Prank(rawValue: raw) { duck.tryPrank(p) }
+    }
+    @objc private func tryFootprints() { duck.tryFootprints() }
+    @objc private func putBack() { duck.putEverythingBack() }
     @objc private func quit() { NSApp.terminate(nil) }
 }

@@ -43,6 +43,12 @@ final class World {
     var iconLookupFailed = false
     /// Icon temporarily owned by the surf animation; ignore Finder reports about it.
     var lockedIcon: String?
+    /// Icon the duck is currently carrying; it isn't something to stand on.
+    var carriedIcon: String?
+    /// Buttons in the focused window, with the platform on top of each (for squatting on them).
+    private(set) var contentButtons: [(rect: NSRect, platformID: String)] = []
+    /// Owner and Quartz frame of each on-screen window, by window number.
+    private(set) var windowInfo: [Int: (pid: pid_t, frame: CGRect)] = [:]
 
     private var iconQueryRunning = false
     private let ownPID = ProcessInfo.processInfo.processIdentifier
@@ -64,6 +70,7 @@ final class World {
 
     var iconPlatforms: [Platform] {
         icons.compactMap { icon in
+            if icon.name == carriedIcon { return nil }
             let top = icon.center.y + iconSize * 0.4
             // Icons hidden behind a window aren't solid.
             if windowRects.contains(where: { $0.insetBy(dx: -4, dy: -4).contains(CGPoint(x: icon.center.x, y: top)) }) { return nil }
@@ -164,6 +171,7 @@ final class World {
     func refreshWindows() {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return }
         var rects: [(Int, NSRect)] = []
+        var info: [Int: (pid: pid_t, frame: CGRect)] = [:]
         for w in list {
             guard (w[kCGWindowLayer as String] as? Int) == 0,
                   (w[kCGWindowOwnerPID as String] as? Int32) != ownPID,
@@ -173,9 +181,13 @@ final class World {
             let r = toAppKit(CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0))
             if r.width < 140 || r.height < 80 { continue }
             rects.append((num, r))
+            if let pid = w[kCGWindowOwnerPID as String] as? pid_t {
+                info[num] = (pid, CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0))
+            }
             if rects.count >= 14 { break }
         }
         windowRects = rects.map(\.1)
+        windowInfo = info
         var tops: [Platform] = []
         var hangs: [Platform] = []
         for (idx, (num, r)) in rects.enumerated() {
@@ -199,12 +211,12 @@ final class World {
 
     // MARK: App contents (via Accessibility)
 
-    func clearContent() { contentPlatforms = [] }
+    func clearContent() { contentPlatforms = []; contentButtons = [] }
 
     /// Turns a scan of the focused window into platforms: only the parts you can actually see,
     /// with room above them, and without a platform on every single line of text.
     func setContent(_ r: AXScanner.Result?) {
-        guard let r else { contentPlatforms = []; return }
+        guard let r else { contentPlatforms = []; contentButtons = []; return }
         let win = toAppKit(r.windowFrame)
         // Windows stacked in front of the scanned one hide its contents.
         let idx = windowRects.firstIndex { abs($0.minX - win.minX) < 4 && abs($0.maxY - win.maxY) < 4 && abs($0.width - win.width) < 6 }
@@ -240,6 +252,11 @@ final class World {
         contentPlatforms = kept.map { c in
             Platform(id: "a:\(Int(c.x0 / 3)),\(Int(c.y / 2)),\(Int((c.x1 - c.x0) / 3))", kind: .content,
                      x0: c.x0, x1: c.x1, y: c.y)
+        }
+        contentButtons = r.buttons.compactMap { cg in
+            let a = toAppKit(cg)
+            guard let p = contentPlatforms.first(where: { abs($0.y - a.maxY) < 4 && a.midX >= $0.x0 && a.midX <= $0.x1 }) else { return nil }
+            return (a, p.id)
         }
     }
 

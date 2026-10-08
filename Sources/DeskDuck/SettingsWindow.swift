@@ -33,6 +33,9 @@ struct SettingsView: View {
     struct Actions {
         var summon: () -> Void
         var quack: () -> Void
+        var tryPrank: (Prank) -> Void
+        var tryFootprints: () -> Void
+        var putBack: () -> Void
     }
 
     @ObservedObject var settings: DuckSettings
@@ -48,6 +51,7 @@ struct SettingsView: View {
             permissionsSection
             placesSection
             personalitySection
+            mischiefSection
             lookSection
             HStack {
                 Button("Summon to Cursor", action: actions.summon)
@@ -81,7 +85,8 @@ struct SettingsView: View {
                 status: accessibility,
                 detail: "Lets the duck see the layout of the window you're using (where buttons, images, text "
                     + "blocks and list rows are) so it can hop around on them. It reads positions and sizes only, "
-                    + "never the text, and never clicks or types anything. macOS calls this Accessibility access, "
+                    + "never the text, and never clicks or types anything. The only exception is Window bounce in "
+                    + "Mischief, which nudges windows and is off unless you turn it on. macOS calls this Accessibility access, "
                     + "and it technically allows much more than that, which is why macOS asks you first.",
                 buttonTitle: accessibility == .granted ? "Open Settings" : "Allow…",
                 action: {
@@ -158,6 +163,57 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: Mischief
+
+    private var mischiefSection: some View {
+        Section {
+            SliderRow("How often", value: $settings.mischief, low: "Angel", high: "Gremlin")
+            PrankToggle(isOn: $settings.iconHeist, title: "Icon heists",
+                        detail: "Grabs desktop icons in its bill and hides one behind the Dock or a window, piles a few up, "
+                            + "lines them up, or stacks them into a tower and stands on top.",
+                        tryIt: { actions.tryPrank(.iconHeist) })
+            PrankToggle(isOn: $settings.buttonSquat, title: "Button squatting",
+                        detail: "Sits smugly on a button in the app you're using. It never presses it, and it scrambles "
+                            + "off the moment your cursor gets close. Needs \"See inside apps\".",
+                        tryIt: { actions.tryPrank(.buttonSquat) })
+            PrankToggle(isOn: $settings.cursorHeist, title: "Cursor heists",
+                        detail: "Only after you've left the mouse alone for a while: it bites the cursor and carries it "
+                            + "somewhere silly, like the notch. Touch the mouse and it lets go instantly.",
+                        tryIt: { actions.tryPrank(.cursorHeist) })
+            PrankToggle(isOn: $settings.hideAndSeek, title: "Hide and seek",
+                        detail: "Tucks itself just off the edge of a screen and peeks out now and then. "
+                            + "Click it when you spot it.",
+                        tryIt: { actions.tryPrank(.hideAndSeek) })
+            PrankToggle(isOn: $settings.footprints, title: "Muddy footprints",
+                        detail: "After a big landing it tracks little footprints across your windows. They fade away "
+                            + "on their own after about a minute.",
+                        tryIt: actions.tryFootprints)
+            PrankToggle(isOn: $settings.caughtRedHanded, title: "Caught red-handed",
+                        detail: "Hover over it right after it's been up to something: it freezes, slowly turns to look "
+                            + "at you, and whistles innocently.",
+                        tryIt: nil)
+            PrankToggle(isOn: $settings.windowBounce, title: "Window bouncing",
+                        detail: "Bounces on top of a window, which bobs a few pixels with each landing and always settles "
+                            + "back exactly where it was. This moves other apps' windows, so it's off unless you turn it on. "
+                            + "Needs \"See inside apps\".",
+                        tryIt: { actions.tryPrank(.windowBounce) })
+            HStack {
+                Image(systemName: settings.strayIcons > 0 ? "exclamationmark.circle" : "checkmark.circle")
+                    .foregroundStyle(settings.strayIcons > 0 ? .orange : .green)
+                Text(settings.strayIcons > 0
+                     ? "\(settings.strayIcons) icon\(settings.strayIcons == 1 ? " has" : "s have") wandered off"
+                     : "All your desktop icons are home")
+                Spacer()
+                Button("Put Everything Back", action: actions.putBack).disabled(settings.strayIcons == 0)
+            }
+        } header: {
+            Text("Mischief")
+        } footer: {
+            Text("Mischief is always undoable and never touches what's inside your apps. "
+                 + "\"Try\" does it right away, even if it's switched off.")
+        }
+    }
+
     // MARK: Look & sound
 
     private var lookSection: some View {
@@ -173,6 +229,22 @@ struct SettingsView: View {
             SliderRow("Size", value: $settings.sizeSlider, low: "Tiny", high: "Kaiju", valueText: settings.sizeLabel)
             Toggle("Mute", isOn: $settings.muted)
             SliderRow("Volume", value: $settings.volume, low: "Quiet", high: "Loud").disabled(settings.muted)
+        }
+    }
+}
+
+private struct PrankToggle: View {
+    @Binding var isOn: Bool
+    let title: String
+    let detail: String
+    let tryIt: (() -> Void)?
+
+    var body: some View {
+        HStack(alignment: .top) {
+            Toggle(isOn: $isOn) { SettingText(title, detail) }
+            if let tryIt {
+                Button("Try", action: tryIt).controlSize(.small)
+            }
         }
     }
 }

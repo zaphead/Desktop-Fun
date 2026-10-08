@@ -6,6 +6,11 @@ them, wanders off to far-away spots (even other monitors), rocket-jumps, hangs u
 from the menu bar or the top of a maximized window (or peeks out of the notch),
 naps, quacks, and occasionally surfs one of your desktop icons to a new spot.
 
+- It walks in several styles: tiptoe, waddle, cartoon strut, wheel-legged scurry, sneak, skip and moonwalk.
+- **Mischief** (all toggleable, with a frequency slider from Angel to Gremlin): icon heists, button
+  squatting, cursor heists (only while you're away from the mouse), hide and seek, muddy footprints,
+  getting caught red-handed, and opt-in window bouncing. **Put Everything Back** restores any moved icons.
+- Sounds are synthesized and panned in stereo to wherever the duck is on your desk.
 - **Click** it to make it quack and hop. **Drag** it to pick it up, and fling it to throw it.
 - With **Accessibility** access it can also see inside the app you're using (buttons, images, text,
   list rows) and hop around on them. It reads positions and sizes only, never text.
@@ -34,6 +39,8 @@ and screen edges.
 | `Settings.swift`, `SettingsWindow.swift` | Persisted settings, permission checks, and the SwiftUI settings window |
 | `IconMover.swift` | Streams positions to a long-lived Finder script so icons glide smoothly |
 | `DuckWindow.swift` | Transparent click-through panel + a lean Metal renderer for the scene |
-| `Sound.swift` | Synthesized robot quacks (no audio files) |
+| `Mischief.swift` | The pranks: scheduling, each prank's steps, cleanup, and the icon "home" list for Put Everything Back |
+| `Footprints.swift` | Fading muddy footprints drawn on a click-through overlay |
+| `Sound.swift` | Synthesized robot quacks, laughs and whistles, panned in stereo (no audio files) |
 
 Preview the model without launching the app: `swift run DeskDuck --snapshot /tmp/duck` renders PNGs.
